@@ -32,15 +32,13 @@
 
 ### Week 1 — YYYY-MM-DD
 
-**Attended this week's meeting:** Yes / No
+**Attended this week's meeting:** Yes 
 
 **Progress this week**
 - Set up repository from the FURP template.
-- _..._
 
 **Challenges & blockers**
-- _..._
-
+- Understand details
 **Next steps**
 - _..._
 
