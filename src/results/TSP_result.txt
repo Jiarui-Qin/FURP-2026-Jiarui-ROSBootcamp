@@ -1,0 +1,5 @@
+﻿Objective: 7293 miles
+Route for vehicle 0:
+ 0 -> 7 -> 2 -> 3 -> 4 -> 12 -> 6 -> 8 -> 1 -> 11 -> 10 -> 5 -> 9 -> 0
+Route distance: 7293miles
+
