@@ -41,5 +41,7 @@ POMO method not started due to time constraints will prioritize next week
 ### Links
 
 GitHub Repository https://github.com/Jiarui-Qin/FURP-2026-Jiarui-ROSBootcamp
+
 Comparison Chart https://github.com/Jiarui-Qin/FURP-2026-Jiarui-ROSBootcamp/blob/master/src/py-ga-VRPTW/results/comparison_chart.png
+
 data https://github.com/Jiarui-Qin/FURP-2026-Jiarui-ROSBootcamp/tree/master/src/py-ga-VRPTW/results
