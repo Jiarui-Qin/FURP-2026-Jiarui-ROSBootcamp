@@ -12,44 +12,8 @@ from .utils import make_dirs_for_file, exist, load_instance, merge_rules
 
 
 def ind2route(individual, instance):
-    '''gavrptw.core.ind2route(individual, instance)'''
-    route = []
-    vehicle_capacity = instance['vehicle_capacity']
-    depart_due_time = instance['depart']['due_time']
-    # Initialize a sub-route
-    sub_route = []
-    vehicle_load = 0
-    elapsed_time = 0
-    last_customer_id = 0
-    for customer_id in individual:
-        # Update vehicle load
-        demand = instance[f'customer_{customer_id}']['demand']
-        updated_vehicle_load = vehicle_load + demand
-        # Update elapsed time
-        service_time = instance[f'customer_{customer_id}']['service_time']
-        return_time = instance['distance_matrix'][customer_id][0]
-        updated_elapsed_time = elapsed_time + \
-            instance['distance_matrix'][last_customer_id][customer_id] + service_time + return_time
-        # Validate vehicle load and elapsed time
-        if (updated_vehicle_load <= vehicle_capacity) and (updated_elapsed_time <= depart_due_time):
-            # Add to current sub-route
-            sub_route.append(customer_id)
-            vehicle_load = updated_vehicle_load
-            elapsed_time = updated_elapsed_time - return_time
-        else:
-            # Save current sub-route
-            route.append(sub_route)
-            # Initialize a new sub-route and add to it
-            sub_route = [customer_id]
-            vehicle_load = demand
-            elapsed_time = instance['distance_matrix'][0][customer_id] + service_time
-        # Update last customer ID
-        last_customer_id = customer_id
-    if sub_route != []:
-        # Save current sub-route before return if not empty
-        route.append(sub_route)
-    return route
-
+    print("=== USING NEW ind2route ===")
+    return [individual[:]]
 
 def print_route(route, merge=False):
     '''gavrptw.core.print_route(route, merge=False)'''
@@ -69,43 +33,67 @@ def print_route(route, merge=False):
         print(route_str)
 
 
-def eval_vrptw(individual, instance, unit_cost=1.0, init_cost=0, wait_cost=0, delay_cost=0):
-    '''gavrptw.core.eval_vrptw(individual, instance, unit_cost=1.0, init_cost=0, wait_cost=0,
-        delay_cost=0)'''
-    total_cost = 0
+def eval_vrptw(individual, instance, unit_cost=1.0, init_cost=0, wait_cost=0, delay_cost=0, 
+               ev_penalty=500.0, tw_penalty=500.0):
+    '''gavrptw.core.eval_vrptw with penalty for EV and TW violations'''
     route = ind2route(individual, instance)
+    print(f"eval_vrptw: route has {len(route)} sub-routes")
+
     total_cost = 0
+    total_ev_penalty = 0
+    total_tw_penalty = 0
+    
+    battery_capacity = instance.get('battery_capacity', 100)
+    battery_rate = instance.get('battery_consumption_rate', 1.0)
+    dist_matrix = instance['distance_matrix']
+    
     for sub_route in route:
         sub_route_time_cost = 0
         sub_route_distance = 0
         elapsed_time = 0
         last_customer_id = 0
+        current_battery = battery_capacity
+        
         for customer_id in sub_route:
-            # Calculate section distance
-            distance = instance['distance_matrix'][last_customer_id][customer_id]
-            # Update sub-route distance
+            distance = dist_matrix[last_customer_id][customer_id]
             sub_route_distance = sub_route_distance + distance
-            # Calculate time cost
+            
+            # Battery constraint with penalty
+            battery_needed = distance * battery_rate
+            if current_battery - battery_needed < 0:
+                shortage = abs(current_battery - battery_needed)
+                total_ev_penalty += shortage * ev_penalty
+                current_battery = 0
+            else:
+                current_battery -= battery_needed
+            
+            # Time window with penalty
             arrival_time = elapsed_time + distance
-            time_cost = wait_cost * max(instance[f'customer_{customer_id}']['ready_time'] - \
-                arrival_time, 0) + delay_cost * max(arrival_time - \
-                instance[f'customer_{customer_id}']['due_time'], 0)
-            # Update sub-route time cost
+            ready_time = instance[f'customer_{customer_id}']['ready_time']
+            due_time = instance[f'customer_{customer_id}']['due_time']
+            
+            # Normal time cost (waiting + delay)
+            time_cost = wait_cost * max(ready_time - arrival_time, 0) + delay_cost * max(arrival_time - due_time, 0)
+            
+            # Extra penalty for large TW violations
+            if arrival_time > due_time:
+                total_tw_penalty += (arrival_time - due_time) * tw_penalty
+            if arrival_time < ready_time:
+                total_tw_penalty += (ready_time - arrival_time) * tw_penalty * 0.1
+            
             sub_route_time_cost = sub_route_time_cost + time_cost
-            # Update elapsed time
             elapsed_time = arrival_time + instance[f'customer_{customer_id}']['service_time']
-            # Update last customer ID
             last_customer_id = customer_id
-        # Calculate transport cost
-        sub_route_distance = sub_route_distance + instance['distance_matrix'][last_customer_id][0]
+        
+        sub_route_distance = sub_route_distance + dist_matrix[last_customer_id][0]
         sub_route_transport_cost = init_cost + unit_cost * sub_route_distance
-        # Obtain sub-route cost
         sub_route_cost = sub_route_time_cost + sub_route_transport_cost
-        # Update total cost
         total_cost = total_cost + sub_route_cost
+    
+    # Add penalties to total cost
+    total_cost = total_cost + total_ev_penalty + total_tw_penalty
     fitness = 1.0 / total_cost
     return (fitness, )
-
 
 def cx_partially_matched(ind1, ind2):
     '''gavrptw.core.cx_partially_matched(ind1, ind2)'''
@@ -133,6 +121,38 @@ def mut_inverse_indexes(individual):
     individual[start:stop+1] = temp
     return (individual, )
 
+def calculate_route_distance(route, dist_matrix):
+    if not route:
+        return 0
+    total = dist_matrix[0][route[0]]
+    for i in range(len(route) - 1):
+        total += dist_matrix[route[i]][route[i+1]]
+    total += dist_matrix[route[-1]][0]
+    return total
+
+def two_opt(route, dist_matrix):
+    if len(route) < 3:
+        return route
+    improved = True
+    best_route = route[:]
+    best_distance = calculate_route_distance(best_route, dist_matrix)
+    while improved:
+        improved = False
+        for i in range(1, len(best_route) - 1):
+            for j in range(i + 1, len(best_route)):
+                if j - i == 1:
+                    continue
+                new_route = best_route[:i] + best_route[i:j+1][::-1] + best_route[j+1:]
+                new_distance = calculate_route_distance(new_route, dist_matrix)
+                if new_distance < best_distance - 1e-6:
+                    best_route = new_route
+                    best_distance = new_distance
+                    improved = True
+                    break
+            if improved:
+                break
+    return best_route
+
 
 def run_gavrptw(instance_name, unit_cost, init_cost, wait_cost, delay_cost, ind_size, pop_size, \
     cx_pb, mut_pb, n_gen, export_csv=False, customize_data=False):
@@ -156,7 +176,8 @@ def run_gavrptw(instance_name, unit_cost, init_cost, wait_cost, delay_cost, ind_
     toolbox.register('population', tools.initRepeat, list, toolbox.individual)
     # Operator registering
     toolbox.register('evaluate', eval_vrptw, instance=instance, unit_cost=unit_cost, \
-        init_cost=init_cost, wait_cost=wait_cost, delay_cost=delay_cost)
+    init_cost=init_cost, wait_cost=wait_cost, delay_cost=delay_cost, \
+    ev_penalty=500.0, tw_penalty=500.0)
     toolbox.register('select', tools.selRoulette)
     toolbox.register('mate', cx_partially_matched)
     toolbox.register('mutate', mut_inverse_indexes)
@@ -205,6 +226,7 @@ def run_gavrptw(instance_name, unit_cost, init_cost, wait_cost, delay_cost, ind_
         print(f'  Avg {mean}')
         print(f'  Std {std}')
         # Write data to holders for exporting results to CSV file
+        # Write data to holders for exporting results to CSV file
         if export_csv:
             csv_row = {
                 'generation': gen,
@@ -215,11 +237,17 @@ def run_gavrptw(instance_name, unit_cost, init_cost, wait_cost, delay_cost, ind_
                 'std_fitness': std,
             }
             csv_data.append(csv_row)
+    
     print('-- End of (successful) evolution --')
     best_ind = tools.selBest(pop, 1)[0]
     print(f'Best individual: {best_ind}')
     print(f'Fitness: {best_ind.fitness.values[0]}')
-    print_route(ind2route(best_ind, instance))
+    
+    final_route = ind2route(best_ind, instance)
+    print(f"Final route has {len(final_route)} sub-routes")
+    for i, sub_route in enumerate(final_route):
+        print(f"  Sub-route {i+1}: length {len(sub_route)}")
+    
     print(f'Total cost: {1 / best_ind.fitness.values[0]}')
     if export_csv:
         csv_file_name = f'{instance_name}_uC{unit_cost}_iC{init_cost}_wC{wait_cost}' \
